@@ -1,0 +1,13 @@
+{
+    "archivos": {
+        "Informe_1": {
+            "owner": "Maria",
+            "permisos": {
+                "Maria": [
+                    "lectura",
+                    "escritura"
+                ]
+            }
+        }
+    }
+}

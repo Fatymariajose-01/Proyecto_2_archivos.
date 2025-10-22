@@ -1,340 +1,377 @@
-import os
+import sys
 import json
-import uuid
-from datetime import datetime
+import os
+import datetime
+from PyQt5.QtWidgets import (
+    QApplication, QWidget, QMainWindow, QVBoxLayout, QHBoxLayout, QLabel,
+    QPushButton, QListWidget, QInputDialog, QMessageBox, QTextEdit, QLineEdit
+)
 
-# Directorio y archivos base
-directorio_bloques = 'bloques_datos'
-archivo_tabla_fat = 'tabla_fat.json'
-tamaño_bloque = 20
+USERS_FILE = "usuarios.json"
+PERMISSIONS_FILE = "permisos.json"
+FAT_FILE = "fat.json"
+LOG_FILE = "bitacora.txt"
+BLOQUES_DIR = "bloques"
 
-# Crear carpeta y archivo inicial si no existen
-os.makedirs(directorio_bloques, exist_ok=True)
-if not os.path.exists(archivo_tabla_fat):
-    with open(archivo_tabla_fat, 'w', encoding='utf-8') as f:
-        json.dump([], f, indent=2, ensure_ascii=False)
+# -------------------- FUNCIONES AUXILIARES --------------------
 
-# Cargar y guardar tabla FAT
-def cargar_fat():
-    with open(archivo_tabla_fat, 'r', encoding='utf-8') as f:
+def cargar_json(ruta, defecto):
+    if not os.path.exists(ruta):
+        with open(ruta, "w", encoding="utf-8") as f:
+            json.dump(defecto, f, indent=4)
+        return defecto
+    with open(ruta, "r", encoding="utf-8") as f:
         return json.load(f)
 
-def guardar_fat(tabla):
-    with open(archivo_tabla_fat, 'w', encoding='utf-8') as f:
-        json.dump(tabla, f, indent=2, ensure_ascii=False)
+def guardar_json(ruta, datos):
+    with open(ruta, "w", encoding="utf-8") as f:
+        json.dump(datos, f, indent=4)
 
-# Obtener fecha y hora actual
-def ahora():
-    return datetime.utcnow().isoformat() + 'Z'
+def registrar_en_bitacora(usuario, accion, archivo, resultado):
+    fecha = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with open(LOG_FILE, "a", encoding="utf-8") as f:
+        f.write(f"[{fecha}] Usuario: {usuario} | Acción: {accion} | Archivo: {archivo} | Resultado: {resultado}\n")
 
-# Crear bloque físico de datos
-def crear_bloque(contenido, siguiente_ruta=None, fin_archivo=False):
-    bloque_id = str(uuid.uuid4())
-    ruta = os.path.join(directorio_bloques, f'bloque_{bloque_id}.json')
-    bloque = {
-        'datos': contenido,
-        'siguiente': siguiente_ruta,
-        'fin_archivo': fin_archivo
-    }
-    with open(ruta, 'w', encoding='utf-8') as f:
-        json.dump(bloque, f, ensure_ascii=False, indent=2)
-    return ruta
+def crear_bloques(texto):
+    if not os.path.exists(BLOQUES_DIR):
+        os.makedirs(BLOQUES_DIR)
 
-# Leer bloque desde archivo JSON
-def leer_bloque(ruta):
-    with open(ruta, 'r', encoding='utf-8') as f:
-        return json.load(f)
+    bloques = []
+    partes = [texto[i:i + 20] for i in range(0, len(texto), 20)]
+    for i, parte in enumerate(partes):
+        bloque_nombre = f"{BLOQUES_DIR}/bloque_{datetime.datetime.now().timestamp()}_{i}.json"
+        bloque = {
+            "datos": parte,
+            "siguiente": None,
+            "eof": i == len(partes) - 1
+        }
+        if i > 0:
+            bloques[-1]["contenido"]["siguiente"] = bloque_nombre
+            guardar_json(bloques[-1]["ruta"], bloques[-1]["contenido"])
+        bloques.append({"ruta": bloque_nombre, "contenido": bloque})
+    guardar_json(bloques[-1]["ruta"], bloques[-1]["contenido"])
+    return bloques[0]["ruta"]
 
-# Eliminar archivo de bloque físico
-def eliminar_bloque(ruta):
-    try:
-        os.remove(ruta)
-    except FileNotFoundError:
-        pass
+def leer_contenido_bloques(ruta_inicial):
+    contenido = ""
+    actual = ruta_inicial
+    while actual and os.path.exists(actual):
+        bloque = cargar_json(actual, {})
+        contenido += bloque.get("datos", "")
+        actual = bloque.get("siguiente")
+    return contenido
 
-# Dividir contenido en bloques de tamaño máximo
-def dividir_en_bloques(contenido):
-    return [contenido[i:i+tamaño_bloque] for i in range(0, len(contenido), tamaño_bloque)]
 
-# Buscar archivo por nombre en la tabla FAT
-def buscar_archivo(tabla, nombre):
-    for entrada in tabla:
-        if entrada['nombre'] == nombre:
-            return entrada
-    return None
+# -------------------- CLASE PRINCIPAL --------------------
 
-# Crear nuevo archivo y sus bloques
-def crear_archivo(tabla, nombre, contenido, propietario):
-    if buscar_archivo(tabla, nombre):
-        print('Ya existe un archivo con ese nombre.')
-        return
-    bloques = dividir_en_bloques(contenido)
-    ruta_anterior = None
-    ruta_inicial = None
-    for i, parte in enumerate(bloques):
-        fin = (i == len(bloques) - 1)
-        ruta = crear_bloque(parte, None, fin)
-        if ruta_anterior:
-            bloque_prev = leer_bloque(ruta_anterior)
-            bloque_prev['siguiente'] = ruta
-            with open(ruta_anterior, 'w', encoding='utf-8') as f:
-                json.dump(bloque_prev, f, ensure_ascii=False, indent=2)
+class MainWindow(QMainWindow):
+    def __init__(self, usuario, login_window):
+        super().__init__()
+        self.usuario = usuario
+        self.login_window = login_window
+        self.setWindowTitle(f"Gestor FAT - Sesión: {usuario}")
+        self.setGeometry(400, 200, 700, 450)
+
+        self.setStyleSheet("""
+            QMainWindow { background-color: #0e1a2b; color: white; }
+            QPushButton {
+                background-color: #0078d7;
+                border: none;
+                padding: 8px;
+                border-radius: 6px;
+                color: white;
+                font-weight: bold;
+            }
+            QPushButton:disabled {
+                background-color: #444;
+                color: #aaa;
+            }
+            QPushButton:hover:!disabled { background-color: #3399ff; }
+            QListWidget { background-color: #1a273d; color: white; border-radius: 6px; padding: 4px; }
+        """)
+
+        layout = QVBoxLayout()
+        label = QLabel(f"Bienvenido, {usuario}")
+        label.setStyleSheet("font-size: 18px; font-weight: bold; margin: 6px;")
+        layout.addWidget(label)
+
+        self.lista = QListWidget()
+        layout.addWidget(self.lista)
+
+        botones_layout = QHBoxLayout()
+        self.btn_crear = QPushButton("Crear archivo")
+        self.btn_abrir = QPushButton("Abrir archivo")
+        self.btn_modificar = QPushButton("Modificar archivo")
+        self.btn_eliminar = QPushButton("Eliminar archivo")
+        self.btn_recuperar = QPushButton("Recuperar archivo")
+        self.btn_permisos = QPushButton("Permisos")
+        self.btn_cerrar = QPushButton("Cerrar sesión")
+
+        self.btn_crear.clicked.connect(self.crear_archivo)
+        self.btn_abrir.clicked.connect(self.abrir_archivo)
+        self.btn_modificar.clicked.connect(self.modificar_archivo)
+        self.btn_eliminar.clicked.connect(self.eliminar_archivo)
+        self.btn_recuperar.clicked.connect(self.recuperar_archivo)
+        self.btn_permisos.clicked.connect(self.gestionar_permisos)
+        self.btn_cerrar.clicked.connect(self.cerrar_sesion)
+
+        botones = [
+            self.btn_crear, self.btn_abrir, self.btn_modificar,
+            self.btn_eliminar, self.btn_recuperar, self.btn_permisos, self.btn_cerrar
+        ]
+        for b in botones:
+            botones_layout.addWidget(b)
+
+        layout.addLayout(botones_layout)
+
+        # Deshabilitar botón de permisos si no es admin
+        if self.usuario != "admin":
+            self.btn_permisos.setDisabled(True)
+
+        central = QWidget()
+        central.setLayout(layout)
+        self.setCentralWidget(central)
+
+        self.actualizar_lista()
+        self.ventanas_abiertas = []  # para evitar que se cierren QTextEdit
+
+    # -------------------- FUNCIONES DE ARCHIVO --------------------
+
+    def actualizar_lista(self):
+        fat = cargar_json(FAT_FILE, {"archivos": {}})
+        self.lista.clear()
+        for nombre, info in fat["archivos"].items():
+            if not info.get("eliminado", False):
+                self.lista.addItem(nombre)
+
+    def crear_archivo(self):
+        nombre, ok = QInputDialog.getText(self, "Nuevo archivo", "Ingrese nombre del archivo:")
+        if not ok or not nombre:
+            return
+        contenido, ok = QInputDialog.getMultiLineText(self, "Contenido", "Ingrese el contenido:")
+        if not ok:
+            return
+        ruta_bloque = crear_bloques(contenido)
+        fat = cargar_json(FAT_FILE, {"archivos": {}})
+        fat["archivos"][nombre] = {
+            "nombre": nombre,
+            "ruta_inicial": ruta_bloque,
+            "eliminado": False,
+            "caracteres": len(contenido),
+            "fecha_creacion": str(datetime.datetime.now()),
+            "fecha_modificacion": str(datetime.datetime.now()),
+            "fecha_eliminacion": None,
+            "owner": self.usuario
+        }
+        guardar_json(FAT_FILE, fat)
+
+        permisos = cargar_json(PERMISSIONS_FILE, {"archivos": {}})
+        permisos["archivos"][nombre] = {"owner": self.usuario, "permisos": {self.usuario: ["lectura", "escritura"]}}
+        guardar_json(PERMISSIONS_FILE, permisos)
+
+        registrar_en_bitacora(self.usuario, "crear", nombre, "Éxito")
+        self.actualizar_lista()
+        QMessageBox.information(self, "Éxito", "Archivo creado correctamente.")
+
+    def abrir_archivo(self):
+        archivo = self.lista.currentItem()
+        if not archivo:
+            QMessageBox.warning(self, "Error", "Seleccione un archivo.")
+            return
+        archivo = archivo.text()
+
+        permisos = cargar_json(PERMISSIONS_FILE, {"archivos": {}})
+        datos = permisos["archivos"].get(archivo, {})
+        if self.usuario not in datos.get("permisos", {}) or "lectura" not in datos["permisos"][self.usuario]:
+            QMessageBox.warning(self, "Permiso denegado", "No tiene permiso de lectura.")
+            registrar_en_bitacora(self.usuario, "abrir", archivo, "Permiso denegado")
+            return
+
+        fat = cargar_json(FAT_FILE, {"archivos": {}})
+        info = fat["archivos"].get(archivo)
+        if not info:
+            QMessageBox.warning(self, "Error", "Archivo no encontrado.")
+            return
+
+        contenido = leer_contenido_bloques(info["ruta_inicial"])
+        ventana = QTextEdit()
+        ventana.setReadOnly(True)
+        ventana.setText(contenido)
+        ventana.setWindowTitle(f"Lectura - {archivo}")
+        ventana.resize(500, 400)
+        ventana.show()
+
+        # Guardar referencia para evitar que se cierre
+        self.ventanas_abiertas.append(ventana)
+
+        registrar_en_bitacora(self.usuario, "abrir", archivo, "Éxito")
+
+    def modificar_archivo(self):
+        archivo = self.lista.currentItem()
+        if not archivo:
+            QMessageBox.warning(self, "Error", "Seleccione un archivo.")
+            return
+        archivo = archivo.text()
+
+        permisos = cargar_json(PERMISSIONS_FILE, {"archivos": {}})
+        datos = permisos["archivos"].get(archivo, {})
+        if self.usuario not in datos.get("permisos", {}) or "escritura" not in datos["permisos"][self.usuario]:
+            QMessageBox.warning(self, "Permiso denegado", "No tiene permiso de escritura.")
+            registrar_en_bitacora(self.usuario, "modificar", archivo, "Permiso denegado")
+            return
+
+        fat = cargar_json(FAT_FILE, {"archivos": {}})
+        info = fat["archivos"].get(archivo)
+        contenido_actual = leer_contenido_bloques(info["ruta_inicial"])
+
+        nuevo, ok = QInputDialog.getMultiLineText(self, "Modificar archivo", "Contenido actual:\n" + contenido_actual)
+        if not ok:
+            return
+
+        ruta_bloque = crear_bloques(nuevo)
+        info["ruta_inicial"] = ruta_bloque
+        info["caracteres"] = len(nuevo)
+        info["fecha_modificacion"] = str(datetime.datetime.now())
+        fat["archivos"][archivo] = info
+        guardar_json(FAT_FILE, fat)
+
+        registrar_en_bitacora(self.usuario, "modificar", archivo, "Éxito")
+        QMessageBox.information(self, "Éxito", "Archivo modificado correctamente.")
+
+    def eliminar_archivo(self):
+        archivo = self.lista.currentItem()
+        if not archivo:
+            QMessageBox.warning(self, "Error", "Seleccione un archivo.")
+            return
+        archivo = archivo.text()
+        fat = cargar_json(FAT_FILE, {"archivos": {}})
+        if archivo not in fat["archivos"]:
+            return
+        fat["archivos"][archivo]["eliminado"] = True
+        fat["archivos"][archivo]["fecha_eliminacion"] = str(datetime.datetime.now())
+        guardar_json(FAT_FILE, fat)
+        self.actualizar_lista()
+        registrar_en_bitacora(self.usuario, "eliminar", archivo, "Éxito")
+        QMessageBox.information(self, "Éxito", "Archivo enviado a la papelera.")
+
+    def recuperar_archivo(self):
+        fat = cargar_json(FAT_FILE, {"archivos": {}})
+        papelera = [n for n, i in fat["archivos"].items() if i.get("eliminado", False)]
+        if not papelera:
+            QMessageBox.information(self, "Papelera", "No hay archivos en papelera.")
+            return
+        archivo, ok = QInputDialog.getItem(self, "Recuperar archivo", "Seleccione:", papelera, 0, False)
+        if ok:
+            fat["archivos"][archivo]["eliminado"] = False
+            guardar_json(FAT_FILE, fat)
+            registrar_en_bitacora(self.usuario, "recuperar", archivo, "Éxito")
+            self.actualizar_lista()
+            QMessageBox.information(self, "Éxito", "Archivo recuperado.")
+
+    def gestionar_permisos(self):
+        if self.usuario != "admin":
+            QMessageBox.warning(self, "Acceso denegado", "Solo el administrador puede gestionar permisos.")
+            registrar_en_bitacora(self.usuario, "permiso", "-", "Intento no autorizado")
+            return
+
+        permisos = cargar_json(PERMISSIONS_FILE, {"archivos": {}})
+        archivo = self.lista.currentItem()
+        if not archivo:
+            QMessageBox.warning(self, "Error", "Seleccione un archivo.")
+            return
+        archivo = archivo.text()
+
+        usuarios = list(cargar_json(USERS_FILE, {}).keys())
+        usuario_sel, ok = QInputDialog.getItem(self, "Asignar permisos", "Seleccione usuario:", usuarios, 0, False)
+        if not ok:
+            return
+        permisos_disp = ["lectura", "escritura"]
+        perm, ok = QInputDialog.getItem(self, "Permiso", "Seleccione permiso:", permisos_disp, 0, False)
+        if not ok:
+            return
+
+        datos = permisos["archivos"].get(archivo, {"permisos": {}})
+        if "permisos" not in datos:
+            datos["permisos"] = {}
+        if usuario_sel not in datos["permisos"]:
+            datos["permisos"][usuario_sel] = []
+        if perm not in datos["permisos"][usuario_sel]:
+            datos["permisos"][usuario_sel].append(perm)
+        permisos["archivos"][archivo] = datos
+        guardar_json(PERMISSIONS_FILE, permisos)
+
+        registrar_en_bitacora(self.usuario, "permiso", archivo, f"Concedido {perm} a {usuario_sel}")
+        QMessageBox.information(self, "Éxito", "Permiso asignado correctamente.")
+
+    def cerrar_sesion(self):
+        self.close()
+        self.login_window.show()
+
+
+# -------------------- LOGIN --------------------
+
+class LoginWindow(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Gestor FAT - Login")
+        self.setGeometry(700, 400, 400, 250)
+        self.setStyleSheet("""
+            QWidget { background-color: #0e1a2b; color: white; font-family: 'Segoe UI'; }
+            QLineEdit { background-color: #1a273d; border: 1px solid #2b3a57; padding: 6px; color: white; border-radius: 6px; }
+            QPushButton { background-color: #0078d7; border: none; padding: 8px; border-radius: 6px; color: white; font-weight: bold; }
+            QPushButton:hover { background-color: #3399ff; }
+        """)
+
+        layout = QVBoxLayout()
+        self.usuario = QLineEdit()
+        self.usuario.setPlaceholderText("Usuario")
+        self.password = QLineEdit()
+        self.password.setPlaceholderText("Contraseña")
+        self.password.setEchoMode(QLineEdit.Password)
+        self.btn_login = QPushButton("Iniciar sesión")
+        self.btn_login.clicked.connect(self.iniciar_sesion)
+        self.btn_crear = QPushButton("Crear usuario")
+        self.btn_crear.clicked.connect(self.crear_usuario)
+        layout.addWidget(QLabel("Gestor FAT - Iniciar sesión"))
+        layout.addWidget(self.usuario)
+        layout.addWidget(self.password)
+        layout.addWidget(self.btn_login)
+        layout.addWidget(self.btn_crear)
+        self.setLayout(layout)
+
+    def iniciar_sesion(self):
+        usuario = self.usuario.text().strip()
+        clave = self.password.text().strip()
+        usuarios = cargar_json(USERS_FILE, {"admin": "admin123"})
+        if usuario in usuarios and usuarios[usuario] == clave:
+            registrar_en_bitacora(usuario, "login", "-", "Éxito")
+            self.hide()
+            self.main_window = MainWindow(usuario, self)
+            self.main_window.show()
         else:
-            ruta_inicial = ruta
-        ruta_anterior = ruta
+            QMessageBox.warning(self, "Error", "Usuario o contraseña incorrectos.")
+            registrar_en_bitacora(usuario, "login", "-", "Fallido")
 
-    entrada = {
-        'nombre': nombre,
-        'ruta_datos': ruta_inicial,
-        'en_papelera': False,
-        'tamaño': len(contenido),
-        'creado': ahora(),
-        'modificado': ahora(),
-        'eliminado': None,
-        'propietario': propietario,
-        'permisos': {propietario: {'lectura': True, 'escritura': True}}
-    }
-    tabla.append(entrada)
-    guardar_fat(tabla)
-    print(f'Archivo "{nombre}" creado con {len(bloques)} bloques.')
-
-# Concatenar contenido de todos los bloques
-def leer_contenido_archivo(entrada):
-    ruta = entrada['ruta_datos']
-    datos = []
-    while ruta:
-        bloque = leer_bloque(ruta)
-        datos.append(bloque.get('datos', ''))
-        ruta = bloque.get('siguiente')
-    return ''.join(datos)
-
-# Listar archivos activos
-def listar_archivos(tabla):
-    for e in tabla:
-        if not e['en_papelera']:
-            print(f"{e['nombre']} (propietario: {e['propietario']}) tamaño: {e['tamaño']} caracteres creado: {e['creado']}")
-
-# Listar archivos en papelera
-def listar_papelera(tabla):
-    for e in tabla:
-        if e['en_papelera']:
-            print(f"{e['nombre']} (propietario: {e['propietario']}) eliminado: {e['eliminado']}")
-
-# Verificar permisos
-def tiene_permiso(entrada, usuario, permiso):
-    if entrada['propietario'] == usuario:
-        return True
-    permisos_usuario = entrada.get('permisos', {}).get(usuario, {})
-    return permisos_usuario.get(permiso, False)
-
-# Abrir archivo y mostrar metadatos
-def abrir_archivo(tabla, nombre, usuario):
-    entrada = buscar_archivo(tabla, nombre)
-    if not entrada:
-        print('Archivo no encontrado.')
-        return
-    if entrada['en_papelera']:
-        print('El archivo está en la papelera. Recupérelo primero.')
-        return
-    if not tiene_permiso(entrada, usuario, 'lectura'):
-        print('No tiene permiso de lectura.')
-        return
-    contenido = leer_contenido_archivo(entrada)
-    print('\n--- METADATOS ---')
-    for k, v in entrada.items():
-        if k != 'ruta_datos':
-            print(f'{k}: {v}')
-    print('\n--- CONTENIDO ---')
-    print(contenido)
-
-# Modificar archivo existente
-def modificar_archivo(tabla, nombre, usuario):
-    entrada = buscar_archivo(tabla, nombre)
-    if not entrada:
-        print('Archivo no encontrado.')
-        return
-    if entrada['en_papelera']:
-        print('El archivo está en la papelera.')
-        return
-    if not tiene_permiso(entrada, usuario, 'escritura'):
-        print('No tiene permiso de escritura.')
-        return
-    print('Contenido actual:\n')
-    print(leer_contenido_archivo(entrada))
-    print('\nIngrese nuevo contenido. Termine con ":wq"')
-    lineas = []
-    while True:
-        linea = input()
-        if linea.strip() == ':wq':
-            break
-        lineas.append(linea)
-    nuevo_contenido = '\n'.join(lineas)
-    bloques = dividir_en_bloques(nuevo_contenido)
-    ruta_anterior = None
-    ruta_inicial = None
-    for i, parte in enumerate(bloques):
-        fin = (i == len(bloques) - 1)
-        ruta = crear_bloque(parte, None, fin)
-        if ruta_anterior:
-            bloque_prev = leer_bloque(ruta_anterior)
-            bloque_prev['siguiente'] = ruta
-            with open(ruta_anterior, 'w', encoding='utf-8') as f:
-                json.dump(bloque_prev, f, ensure_ascii=False, indent=2)
+    def crear_usuario(self):
+        usuario, ok = QInputDialog.getText(self, "Nuevo usuario", "Ingrese nombre de usuario:")
+        if not ok or not usuario:
+            return
+        password, ok = QInputDialog.getText(self, "Nueva contraseña", "Ingrese contraseña:")
+        if not ok or not password:
+            return
+        usuarios = cargar_json(USERS_FILE, {"admin": "admin123"})
+        if usuario in usuarios:
+            QMessageBox.warning(self, "Error", "El usuario ya existe.")
         else:
-            ruta_inicial = ruta
-        ruta_anterior = ruta
-    # Eliminar bloques antiguos
-    ruta_vieja = entrada['ruta_datos']
-    while ruta_vieja:
-        try:
-            bloque = leer_bloque(ruta_vieja)
-        except FileNotFoundError:
-            break
-        siguiente = bloque.get('siguiente')
-        eliminar_bloque(ruta_vieja)
-        ruta_vieja = siguiente
-    entrada['ruta_datos'] = ruta_inicial
-    entrada['tamaño'] = len(nuevo_contenido)
-    entrada['modificado'] = ahora()
-    guardar_fat(tabla)
-    print('Archivo modificado correctamente.')
-
-# Mover archivo a papelera
-def eliminar_archivo(tabla, nombre, usuario):
-    entrada = buscar_archivo(tabla, nombre)
-    if not entrada:
-        print('Archivo no encontrado.')
-        return
-    if entrada['en_papelera']:
-        print('El archivo ya está en la papelera.')
-        return
-    if entrada['propietario'] != usuario:
-        print('Solo el propietario puede eliminar el archivo.')
-        return
-    entrada['en_papelera'] = True
-    entrada['eliminado'] = ahora()
-    guardar_fat(tabla)
-    print('Archivo movido a la papelera.')
-
-# Recuperar archivo desde la papelera
-def recuperar_archivo(tabla, nombre, usuario):
-    entrada = buscar_archivo(tabla, nombre)
-    if not entrada:
-        print('Archivo no encontrado.')
-        return
-    if not entrada['en_papelera']:
-        print('El archivo no está en la papelera.')
-        return
-    if entrada['propietario'] != usuario:
-        print('Solo el propietario puede recuperar el archivo.')
-        return
-    entrada['en_papelera'] = False
-    entrada['eliminado'] = None
-    entrada['modificado'] = ahora()
-    guardar_fat(tabla)
-    print('Archivo recuperado de la papelera.')
-
-# Asignar permisos a otros usuarios
-def asignar_permisos(tabla, nombre, usuario):
-    entrada = buscar_archivo(tabla, nombre)
-    if not entrada:
-        print('Archivo no encontrado.')
-        return
-    if entrada['propietario'] != usuario:
-        print('Solo el propietario puede asignar permisos.')
-        return
-    print('Ingrese el usuario al que desea asignar o revocar permisos:')
-    otro = input().strip()
-    print('Permitir lectura (s/n):')
-    r = input().strip().lower() == 's'
-    print('Permitir escritura (s/n):')
-    w = input().strip().lower() == 's'
-    if 'permisos' not in entrada:
-        entrada['permisos'] = {}
-    entrada['permisos'][otro] = {'lectura': r, 'escritura': w}
-    guardar_fat(tabla)
-    print('Permisos actualizados.')
-
-# Mostrar ayuda de comandos
-def mostrar_ayuda():
-    print('''Comandos disponibles:
-crear - Crear archivo
-listar - Listar archivos activos
-papelera - Mostrar archivos eliminados
-abrir - Abrir y mostrar archivo
-modificar - Modificar archivo (requiere permiso de escritura)
-eliminar - Mover archivo a papelera
-recuperar - Restaurar archivo desde papelera
-permisos - Asignar permisos (solo propietario)
-meta - Mostrar metadatos del archivo
-salir - Salir del programa
-ayuda - Mostrar esta ayuda\n''')
-
-# Mostrar metadatos de un archivo
-def mostrar_metadatos(tabla, nombre):
-    entrada = buscar_archivo(tabla, nombre)
-    if not entrada:
-        print('Archivo no encontrado.')
-        return
-    for k, v in entrada.items():
-        print(f'{k}: {v}')
-
-# Función principal del sistema
-def main():
-    print('Simulador de sistema FAT')
-    print('Ingrese su nombre de usuario ("admin" es el administrador):')
-    usuario_actual = input().strip() or 'admin'
-    print(f'Usuario activo: {usuario_actual}')
-    tabla = cargar_fat()
-    mostrar_ayuda()
-    while True:
-        comando = input('\n> ').strip().lower()
-        if comando == 'crear':
-            print('Nombre del archivo:')
-            nombre = input().strip()
-            print('Ingrese contenido. Termine con ":wq" en una nueva línea:')
-            lineas = []
-            while True:
-                linea = input()
-                if linea.strip() == ':wq':
-                    break
-                lineas.append(linea)
-            contenido = '\n'.join(lineas)
-            crear_archivo(tabla, nombre, contenido, usuario_actual)
-        elif comando == 'listar':
-            listar_archivos(tabla)
-        elif comando == 'papelera':
-            listar_papelera(tabla)
-        elif comando == 'abrir':
-            print('Nombre del archivo:')
-            nombre = input().strip()
-            abrir_archivo(tabla, nombre, usuario_actual)
-        elif comando == 'modificar':
-            print('Nombre del archivo:')
-            nombre = input().strip()
-            modificar_archivo(tabla, nombre, usuario_actual)
-        elif comando == 'eliminar':
-            print('Nombre del archivo:')
-            nombre = input().strip()
-            eliminar_archivo(tabla, nombre, usuario_actual)
-        elif comando == 'recuperar':
-            print('Nombre del archivo:')
-            nombre = input().strip()
-            recuperar_archivo(tabla, nombre, usuario_actual)
-        elif comando == 'permisos':
-            print('Nombre del archivo:')
-            nombre = input().strip()
-            asignar_permisos(tabla, nombre, usuario_actual)
-        elif comando == 'meta':
-            print('Nombre del archivo:')
-            nombre = input().strip()
-            mostrar_metadatos(tabla, nombre)
-        elif comando == 'ayuda':
-            mostrar_ayuda()
-        elif comando == 'salir':
-            break
-        else:
-            print('Comando no reconocido. Escriba "ayuda" para ver opciones.')
+            usuarios[usuario] = password
+            guardar_json(USERS_FILE, usuarios)
+            QMessageBox.information(self, "Éxito", f"Usuario '{usuario}' creado correctamente.")
 
 
-main()
+# -------------------- EJECUCIÓN PRINCIPAL --------------------
+
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    login = LoginWindow()
+    login.show()
+    sys.exit(app.exec_())

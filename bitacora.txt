@@ -1,0 +1,7 @@
+[2025-10-22 10:06:02] Usuario: Maria | Acción: login | Archivo: - | Resultado: Éxito
+[2025-10-22 10:06:23] Usuario: Maria | Acción: crear | Archivo: Informe_1 | Resultado: Éxito
+[2025-10-22 10:06:30] Usuario: Maria | Acción: abrir | Archivo: Informe_1 | Resultado: Éxito
+[2025-10-22 10:06:43] Usuario: Maria | Acción: modificar | Archivo: Informe_1 | Resultado: Éxito
+[2025-10-22 10:06:45] Usuario: Maria | Acción: eliminar | Archivo: Informe_1 | Resultado: Éxito
+[2025-10-22 10:06:50] Usuario: Maria | Acción: recuperar | Archivo: Informe_1 | Resultado: Éxito
+[2025-10-22 10:12:08] Usuario: Maria | Acción: login | Archivo: - | Resultado: Éxito
